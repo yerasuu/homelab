@@ -1,0 +1,85 @@
+networks:
+    cftunnel-transport:
+        name: cftunnel-transport
+    expose-public:
+        name: expose-public
+        driver: bridge
+services:
+    coudflare_tunnel:
+        container_name: coudflare_tunnel
+        image: cloudflare/cloudflared:latest
+        command: tunnel --no-autoupdate run
+        restart: unless-stopped
+        environment:
+            - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
+            - TUNNEL_LOGLEVEL=debug
+            - TUNNEL_ORIGIN_CERT=/certificates/origin/cert.pem
+        volumes:
+            - /data/docker/traefik/certificates/origin:/certificates/origin:ro
+        networks:
+            - cftunnel-transport
+
+    traefik:
+        container_name: traefik
+        image: traefik:v3.5.0
+        restart: unless-stopped
+        command:
+            # Docker settings
+            - --providers.docker
+            - --providers.docker.endpoint=unix:///var/run/docker.sock # Use the secure docker socket proxy
+            - --providers.docker.exposedbydefault=false # Don't expose containers per default
+            - --providers.docker.network=expose-public # Use the cloud-publi docker network
+            - --providers.docker.constraints=Label(`traefik.constraint-label`, `expose-public`) # Add a constraint to only use services with the label "traefik.constraint-label=expose-public"
+
+            # Entrypoints
+            - --entrypoints.web.address=:80 # http
+            - --entrypoints.websecure.address=:443 # https
+
+            # Dashboard
+            - --api
+            - --api.dashboard=false
+
+            # Certificates
+            # see certificates.yaml
+            # in my case I use an origin server certificate from cloudflare
+            - --providers.file.filename=/certificates.yaml
+
+            # Logging
+            - --accesslog=true
+            - --log.level=debug
+        deploy:
+            mode: global
+            labels:
+                # traefik.enable is required because we don't expose all containers automatically
+                - traefik.enable=true
+                - traefik.docker.network=expose-public
+                - traefik.constraint-label=expose-public
+
+                # Global redirection: HTTP to HTTPS
+                - traefik.http.routers.http-redirects.entrypoints=web
+                - traefik.http.routers.http-redirects.rule=hostregexp(`{host:(www\.)?.+}`)
+                - traefik.http.routers.http-redirects.middlewares=traefik-ratelimit,redirect-to-non-www-https
+
+                # Global redirection: HTTPS www to HTTPS non-www
+                - traefik.http.routers.www-redirects.entrypoints=websecure
+                - traefik.http.routers.www-redirects.rule=hostregexp(`{host:(www\.).+}`)
+                - traefik.http.routers.www-redirects.tls=true
+                - traefik.http.routers.www-redirects.tls.options=default
+                - traefik.http.routers.www-redirects.middlewares=traefik-ratelimit,redirect-to-non-www-https
+
+                # Middleware to redirect to bare https
+                - traefik.http.middlewares.redirect-to-non-www-https.redirectregex.regex=^https?://(?:www\.)?(.+)
+                - traefik.http.middlewares.redirect-to-non-www-https.redirectregex.replacement=https://$${1}
+                - traefik.http.middlewares.redirect-to-non-www-https.redirectregex.permanent=true
+
+                # Extra middleware
+                - traefik.http.middlewares.traefik-ratelimit.ratelimit.average=100
+                - traefik.http.middlewares.traefik-ratelimit.ratelimit.burst=50
+        volumes:
+            - /data/docker/traefik/certificates:/certificates
+            - /data/docker/traefik/certificates/origin:/certificates/origin:ro
+            - /data/docker/traefik/certificates.yaml:/certificates.yaml:ro
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+        networks:
+            - expose-public
+            - cftunnel-transport
