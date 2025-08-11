@@ -1,0 +1,47 @@
+services:
+  mongodb:
+    image: arm64v8/mongo:8.0-rc-noble
+    container_name: mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+    volumes:
+      - /data/docker/data/mongodb/data:/data/db
+      - /data/docker/data/mongodb/logs:/var/log/mongodb
+      - /data/docker/data/mongodb/config:/etc/mongo
+    networks:
+      - mongo-internal
+
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGOEXPRESS_LOGIN}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGOEXPRESS_PASSWORD}
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=expose-public
+      - traefik.http.routers.mongo-express.rule=Host(`mongo-express.example.com`)
+      - traefik.http.routers.mongo-express.entrypoints=websecure
+      - traefik.http.routers.mongo-express.tls=true
+      - traefik.http.routers.mongo-express.service=mongo-express
+      - traefik.http.services.mongo-express.loadbalancer.server.port=8081
+    networks:
+      - mongo-internal
+      - expose-public
+
+networks:
+  mongo-internal:
+    name: mongo-internal
+  expose-public:
+    external: true
